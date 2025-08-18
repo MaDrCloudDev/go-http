@@ -58,5 +58,6 @@ func main() {
 	}
 }
 
-// go run ./cmd/tcplistener | tee /tmp/tcp.txt
+// go run . | tee /tmp/tcp.txt
+// go run ./cmd/tcplistener
 // nc -v localhost 42069
