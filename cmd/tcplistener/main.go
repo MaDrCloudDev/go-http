@@ -58,6 +58,6 @@ func main() {
 	}
 }
 
-// go run . | tee /tmp/tcp.txt
-// go run ./cmd/tcplistener
+// go run ./cmd/tcplistener | tee /tmp/rawpost.http
+// curl -X POST -H "Content-Type: application/json" -d '{"foo":"bar"}' http://localhost:42069
 // nc -v localhost 42069
