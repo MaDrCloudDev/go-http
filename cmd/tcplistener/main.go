@@ -6,14 +6,12 @@ import (
 	"net"
 	"time"
 
-	"go.http.me/internal/request" // Adjust to your project path
+	"go.http.me/internal/request"
 )
 
 func handleConnection(conn net.Conn) {
-	// Send a prompt to indicate the server is ready
 	fmt.Fprint(conn, "Enter HTTP request (e.g., GET / HTTP/1.1\r\nHost: localhost:42069\r\n\r\n): ")
 
-	// Set a shorter read deadline
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		log.Printf("error setting read deadline: %v", err)
 		conn.Close()
