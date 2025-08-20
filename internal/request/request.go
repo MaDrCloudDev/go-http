@@ -1,13 +1,17 @@
 package request
 
 import (
-	"bufio"
-	"errors"
+	"bytes"
 	"fmt"
 	"io"
-	"log"
-	"strconv"
-	"strings"
+)
+
+type parserState string
+
+const (
+	StateInit  parserState = "init"
+	StateDone  parserState = "done"
+	StateError parserState = "error"
 )
 
 type RequestLine struct {
@@ -22,113 +26,102 @@ func (r *RequestLine) ValidHTTP() bool {
 
 type Request struct {
 	RequestLine RequestLine
-	Headers     map[string]string
-	Body        []byte
+	State       parserState
+}
+
+func newRequest() *Request {
+	return &Request{
+		State: StateInit,
+	}
 }
 
 var ErrMalformedRequestLine = fmt.Errorf("malformed request line")
 var ErrUnsupportedHTTPVersion = fmt.Errorf("unsupported HTTP version")
-var ErrEmptyRequest = fmt.Errorf("empty or incomplete request")
-var SEPARATOR = "\r\n"
+var ErrRequestInErrorState = fmt.Errorf("request is in error state")
+var SEPARATOR = []byte("\r\n")
 
-func parseRequestLine(b string) (*RequestLine, string, error) {
-	if b == "" {
-		return nil, "", ErrEmptyRequest
-	}
-	idx := strings.Index(b, SEPARATOR)
+func parseRequestLine(b []byte) (*RequestLine, int, error) {
+	idx := bytes.Index(b, SEPARATOR)
 	if idx == -1 {
-		return nil, b, ErrEmptyRequest
+		return nil, 0, nil
 	}
+
 	startLine := b[:idx]
-	restOfMsg := b[idx+len(SEPARATOR):]
-	parts := strings.Split(startLine, " ")
+	read := idx + len(SEPARATOR)
+
+	parts := bytes.Split(startLine, []byte(" "))
 	if len(parts) != 3 {
-		return nil, restOfMsg, ErrMalformedRequestLine
+		return nil, 0, ErrMalformedRequestLine
 	}
-	httpParts := strings.Split(parts[2], "/")
-	if len(httpParts) != 2 || httpParts[0] != "HTTP" {
-		return nil, restOfMsg, ErrMalformedRequestLine
+
+	httpParts := bytes.Split(parts[2], []byte("/"))
+	if len(httpParts) != 2 || string(httpParts[0]) != "HTTP" || string(httpParts[1]) != "1.1" {
+		return nil, 0, ErrMalformedRequestLine
 	}
-	if httpParts[1] != "1.1" {
-		return nil, restOfMsg, ErrUnsupportedHTTPVersion
-	}
+
 	rl := &RequestLine{
-		Method:        parts[0],
-		RequestTarget: parts[1],
-		HttpVersion:   httpParts[1],
+		Method:        string(parts[0]),
+		RequestTarget: string(parts[1]),
+		HttpVersion:   string(httpParts[1]),
 	}
-	return rl, restOfMsg, nil
+	return rl, read, nil
+}
+
+func (r *Request) parse(data []byte) (int, error) {
+	read := 0
+outer:
+	for {
+		switch r.State {
+		case StateError:
+			return 0, ErrRequestInErrorState
+
+		case StateInit:
+			rl, n, err := parseRequestLine(data[read:])
+			if err != nil {
+				r.State = StateError
+				return 0, err
+			}
+			if n == 0 {
+				break outer
+			}
+			r.RequestLine = *rl
+			read += n
+
+			r.State = StateDone
+
+		case StateDone:
+			break outer
+		}
+	}
+	return read, nil
+}
+
+func (r *Request) Done() bool {
+	return r.State == StateDone || r.State == StateError
+}
+
+func (r *Request) Error() bool {
+	return r.State == StateError
 }
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
-	bufReader := bufio.NewReader(reader)
-	var requestData strings.Builder
+	request := newRequest()
 
-	line, err := bufReader.ReadString('\n')
-	if err != nil {
-		if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, ErrEmptyRequest
-		}
-		return nil, errors.Join(fmt.Errorf("unable to read request line"), err)
-	}
-	requestData.WriteString(line)
-	log.Printf("Raw request line: %q", line)
-
-	line = strings.TrimRight(line, "\r\n")
-	if line == "" {
-		return nil, ErrEmptyRequest
-	}
-
-	rl, _, err := parseRequestLine(line + "\r\n")
-	if err != nil {
-		log.Printf("parseRequestLine error: %v", err)
-		return nil, err
-	}
-
-	headers := make(map[string]string)
-	for {
-		line, err := bufReader.ReadString('\n')
+	buf := make([]byte, 1024)
+	bufLen := 0
+	for !request.Done() {
+		n, err := reader.Read(buf[bufLen:])
 		if err != nil {
-			if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
-				log.Printf("EOF during headers, proceeding with partial request")
-				break
-			}
-			log.Printf("Header read error: %v", err)
-			return nil, errors.Join(fmt.Errorf("unable to read headers"), err)
+			return nil, err
 		}
-		requestData.WriteString(line)
-		log.Printf("Raw header line: %q", line)
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			break
-		}
-		parts := strings.SplitN(line, ": ", 2)
-		if len(parts) == 2 {
-			headers[parts[0]] = parts[1]
-		}
-	}
-
-	var body []byte
-	if contentLength, ok := headers["Content-Length"]; ok {
-		length, err := strconv.Atoi(contentLength)
+		bufLen += n
+		readN, err := request.parse(buf[:bufLen])
 		if err != nil {
-			log.Printf("Invalid Content-Length: %v", err)
-			return nil, fmt.Errorf("invalid Content-Length: %v", err)
+			return nil, err
 		}
-		if length > 0 {
-			body = make([]byte, length)
-			_, err = io.ReadFull(bufReader, body)
-			if err != nil && err != io.EOF && !errors.Is(err, io.ErrUnexpectedEOF) {
-				log.Printf("Body read error: %v", err)
-				return nil, errors.Join(fmt.Errorf("unable to read body"), err)
-			}
-			log.Printf("Raw body: %q", string(body))
-		}
-	}
 
-	return &Request{
-		RequestLine: *rl,
-		Headers:     headers,
-		Body:        body,
-	}, nil
+		copy(buf, buf[readN:bufLen])
+		bufLen -= readN
+	}
+	return request, nil
 }

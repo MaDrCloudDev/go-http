@@ -25,8 +25,8 @@ func handleConnection(conn net.Conn) {
 		fmt.Fprintf(conn, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 		return
 	}
-	fmt.Printf("Parsed request: Method=%s, RequestTarget=%s, HttpVersion=%s, Headers=%v, Body=%s\n",
-		req.RequestLine.Method, req.RequestLine.RequestTarget, req.RequestLine.HttpVersion, req.Headers, string(req.Body))
+	fmt.Printf("Parsed request: Method=%s, RequestTarget=%s, HttpVersion=%s",
+		req.RequestLine.Method, req.RequestLine.RequestTarget, req.RequestLine.HttpVersion)
 	response := "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nHello, World!"
 	fmt.Fprint(conn, response)
 }
@@ -49,6 +49,4 @@ func main() {
 }
 
 // go run ./cmd/tcplistener | tee /tmp/rawpost.http
-// curl -X POST -H "Content-Type: application/json" -d '{"foo":"bar"}' http://localhost:42069
-// nc -v localhost 42069
 // echo -e "GET / HTTP/1.1\r\nHost: localhost:42069\r\n\r\n" | nc localhost 42069
